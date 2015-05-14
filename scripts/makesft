@@ -1,0 +1,19 @@
+#!/usr/bin/perl
+#
+#
+if ($#ARGV == -1) {
+ print "Usage: $0 <output file> <sft | ffa files>\n";
+ exit 0;
+}
+
+$out = $ARGV[0];
+shift @ARGV;
+
+foreach (@ARGV) {
+ $dm = $_;
+ $dm =~ s/^.*\.clip\.([\d\.]+)\.ffa.*$/$1/;
+ $m{$dm} = $_;
+}
+foreach $i (sort { $a <=> $b } keys %m) {
+ system ("cat $m{$i} >> $out");
+}

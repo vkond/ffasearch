@@ -1,0 +1,1254 @@
+#!/usr/bin/perl
+#
+# this script plots DM-Period diagram
+# taking the data from sft (or ffa) files
+#
+
+use PGPLOT;
+use Getopt::Long;
+
+$Telescope = "";
+$source = "";
+$mjd = "";
+$date = "";
+
+# if there are no parameters in command line
+# # help is called and program normally exit
+&help($0) && exit if $#ARGV < 0;
+
+$pgplot_dev = "/xwin";
+$plotview = "gray";
+$s1 = -1;
+$s2 = -1;
+$d1 = -1;
+$d2 = -1;
+$p1 = -1;
+$p2 = -1;
+
+# Parse command line
+GetOptions ( "p=s" => \$pgplot_dev, # - pgplot device
+             "s1=f" => \$s1,        # - minimum SNR to plot
+             "s2=f" => \$s2,        # - maximum SNR to plot
+	     "d1=f" => \$d1,        # - minimum DM to plot
+	     "d2=f" => \$d2,        # - maximum DM to plot
+	     "p1=f" => \$p1,        # - minimum Period to plot
+	     "p2=f" => \$p2,        # - maximum Period to plot
+	     "ref=s" => \$reffile,  # - reference file to read the header
+	     "h" => \$help,         # - to print the help    
+             "circ" => \$is_circ); # - to plot with circles
+
+if ($help) { &help($0); exit 0; }
+if ($is_circ) { $plotview = "circ"; }
+if ($reffile) {
+ $Telescope = `header $reffile -telescope`; chomp $Telescope;
+ $source = `header $reffile -source_name`; chomp $source;
+ $mjd = `header $reffile -tstart`; chomp $mjd;
+ $date = `header $reffile -date`; chomp $date;
+}
+
+# check whether input sft or ffa-file is pointed out
+&error ("no input sft-file!") if $#ARGV < 0;
+
+# open the input sft or ffa-file
+$file = "$ARGV[0]";
+open (SFT, "<$file") || &error ("can't open \"$file\"! : $!");
+$psfile = $file . ".ps/cps"; # possible ps-file for writing
+
+# get dm & sft_data
+(my $string = join "", (my @sft_data = (<SFT>))) =~ s/\s/\ /g;
+close (SFT);
+
+# forming dmlist @dm
+$string =~ s/#\ DM\ \=\ ([\d\.]+)\ pc\/cm\^3/&dmlist($1)/ge;
+
+$dmmin = &min (@dm);
+$dmmax = &max (@dm);
+
+$dmmin_local = $dmmin;
+$dmmax_local = $dmmax;
+if ($d1 != -1) { if ($d1 > $dmmin) { $dmmin = $d1; } }
+if ($d2 != -1) { if ($d2 < $dmmax) { $dmmax = $d2; } }
+if ($dmmax <= $dmmin) { $dmmax = $dmmax_local; $dmmin = $dmmin_local; }
+$dmmin_local = $dmmin;
+$dmmax_local = $dmmax;
+
+(my $pmin = $string) =~ s/^.*#\ Search\ in\ period\ range\:\ ([\d\.]+)\ \-.*$/$1/;
+(my $pmax = $string) =~ s/^.*#\ Search\ in\ period\ range\:\ [\d\.]+\ \-\ ([\d\.]+)\ ms.*$/$1/;
+
+$pmin_local = $pmin;
+$pmax_local = $pmax;
+if ($p1 != -1) { if ($p1 > $pmin) { $pmin = $p1; } }
+if ($p2 != -1) { if ($p2 < $pmax) { $pmax = $p2; } }
+if ($pmax <= $pmin) { $pmax = $pmax_local; $pmin = $pmin_local; }
+$pmin_local = $pmin;
+$pmax_local = $pmax;
+
+# read sft-file to @sft_data and remove all blank lines and comments
+map { s/(^\s*$)|(^\s*#.*$)/\#/s } @sft_data;
+my $data = join "\!", @sft_data;
+@dmdata = split /(\#\!)+/, $data;
+
+$smin = -1;
+$smax = -1;
+
+# loop on DMs
+for ($i=1; $i<=$#dm+1; $i++) {
+
+if ($dm[$i-1] < $dmmin || $dm[$i-1] > $dmmax) { next; }
+$j = $dm[$i-1];
+
+# get periods and snr
+@list = split /\!/, $dmdata[2*$i];
+@periods = map { (split /\s+/)[2] } @list;
+@snr = map { (split /\s+/)[3] } @list;
+
+$smax_local = &max (@snr);
+$smin_local = &min (@snr);
+foreach (@snr) { if (/nan/ || /NaN/) { $_ = $smin_local; } }
+
+# hash
+@{$m{$j}}{@periods} = @snr;
+
+# sorted periods
+@periods = sort { $a <=> $b } @periods;
+if ($smin == -1 && $smax == -1) { $smin = $smin_local; $smax = $smax_local; }
+if ($smax_local >= $smax) { $smax = $smax_local; }
+if ($smin_local <= $smin) { $smin = $smin_local; }
+@snr = map { ${$m{$j}}{$_} } @periods;
+
+} # for
+
+$smin_local = $smin;
+$smax_local = $smax;
+if ($s1 != -1) { if ($s1 > $smin) { $smin = $s1; } }
+if ($s2 != -1) { if ($s2 < $smax) { $smax = $s2; } }
+if ($smax <= $smin) { $smax = $smax_local; $smin = $smin_local; }
+$smin_local = $smin;
+$smax_local = $smax;
+
+#
+# graphics part
+#
+
+@ymult = (1000, 500, 250, 200, 150, 100, 50, 25, 10, 5, 4, 2, 1);
+@xmult = (10000, 5000, 4000, 2000, 1000, 500, 400, 250, 200, 150, 120, 100, 80, 60, 50, 40, 25, 20, 10, 8, 6, 5, 4, 2, 1);
+@smult = (10000, 9000, 8000, 7000, 6000, 5000, 4000, 3000, 2000, 1000, 800, 600, 500, 400, 200, 100, 50, 40, 30, 25, 20, 18, 16, 15, 14, 12, 10, 9, 8, 7, 6, 5, 4, 3, 2.5, 2, 1.5, 1);
+$x_major_tic = &gettics ($pmin, $pmax, @xmult);
+$y_major_tic = &gettics ($dmmin, $dmmax, @ymult);
+$s_major_tic = &gettics ($smin, $smax, @smult);
+$ydataoffset = ($dmmax - $dmmin) * 0.1;
+$xdataoffset = ($pmax - $pmin) * 0.02;
+$sdataoffset = ($smax - $smin) * 0.1;
+$xlabel = "Period (ms)";
+$ylabel = "DM (cm\\u-3\\dpc)";
+$slabel = "S/N";
+
+$char_size = 1.;
+
+$id0 = pgopen ($pgplot_dev);
+pgsch ($char_size);
+
+&mainwindow ($pgplot_dev);
+&snr_p_plot ();
+&snr_dm_plot ();
+
+#
+# Labels
+#
+&print_labels ();
+
+if (($pgplot_dev =~ /ps/) || ($pgplot_dev =~ /PS/)) {
+ exit;
+}
+
+# return to main plot
+$active_win = &change_active (2);
+
+# waiting for quit
+&winhelp();
+while (1) {
+ # look for cursor input
+ pgcurs ($x_cursor, $y_cursor, $ch_cursor);
+
+ # to quit
+ if ($ch_cursor =~ /[xXqQ]/) {
+   last;
+ }
+ # to help
+ if ($ch_cursor =~ /[hH]/) { &winhelp(); next; }
+
+ # get value of closest candidate
+ if ($ch_cursor =~ /[gG]/) { 
+  &print_coords ($x_cursor, $y_cursor, $active_win);
+  next;
+ }
+
+ # mark the point with largest SNR in the current view
+ if ($ch_cursor =~ /[\ ]/) {
+  &mark_max ($active_win);
+  next;
+ }
+
+ # refresh main window
+ if ($ch_cursor =~ /[rR]/) { 
+   &mainwindow($pgplot_dev); 
+   &snr_p_plot (); 
+   &snr_dm_plot (); 
+   $active_win = &change_active (($active_win+2)%3);
+   next; 
+ }
+ 
+ # save to postscript-file
+ if ($ch_cursor =~ /[pP]/) {
+  $id1 = pgopen ($psfile);
+  pgslct ($id1); 
+  pgsch ($char_size);
+  &mainwindow($psfile); 
+  &snr_p_plot (); 
+  &snr_dm_plot (); 
+  &print_labels ();
+  pgclos ();
+  pgslct ($id0);
+  next;
+ }
+
+ # change the active window
+ if ($ch_cursor =~ /[\t]/) { $active_win = &change_active ($active_win); next; }
+
+ # zoom-in on X
+ if ($ch_cursor =~ /[\+\=]/) {
+  if ($active_win == 0 || $active_win == 1) {
+   $step = ($pmax - $pmin)/4.;
+   if ($step < 0.01) { next; }
+   if ($x_cursor < $pmin || $x_cursor > $pmax) { next; }
+   $pmin = $x_cursor - $step;
+   $pmax = $x_cursor + $step;
+   if ($pmin < $pmin_local) { $pmin = $pmin_local; }
+   if ($pmax > $pmax_local) { $pmax = $pmax_local; }
+   $x_major_tic = &gettics ($pmin, $pmax, @xmult);
+   $xdataoffset = ($pmax - $pmin) * 0.02;
+  }
+  if ($active_win == 2) {
+   $step = ($dmmax - $dmmin)/4.;
+   if ($step < 0.01) { next; }
+   if ($x_cursor < $dmmin || $x_cursor > $dmmax) { next; }
+   $dmmin = $x_cursor - $step;
+   $dmmax = $x_cursor + $step;
+   if ($dmmin < $dmmin_local) { $dmmin = $dmmin_local; }
+   if ($dmmax > $dmmax_local) { $dmmax = $dmmax_local; }
+   $y_major_tic = &gettics ($dmmin, $dmmax, @ymult);
+   $ydataoffset = ($dmmax - $dmmin) * 0.1;
+  }
+  pgeras ();
+  &mainwindow($pgplot_dev); 
+  &snr_p_plot (); 
+  &snr_dm_plot (); 
+  &print_labels ();
+  $active_win = &change_active (($active_win+2)%3);
+  &plot_marked ($active_win);
+  next;
+ }
+
+ # zoom-out on X
+ if ($ch_cursor =~ /[\-\_]/) {
+  if ($active_win == 0 || $active_win == 1) {
+   if ($pmin == $pmin_local && $pmax == $pmax_local) { next; }
+   $step = ($pmax - $pmin);
+   if ($x_cursor < $pmin || $x_cursor > $pmax) { next; }
+   $pmin = $x_cursor - $step;
+   $pmax = $x_cursor + $step;
+   if ($pmin < $pmin_local) { $pmin = $pmin_local; }
+   if ($pmax > $pmax_local) { $pmax = $pmax_local; }
+   $x_major_tic = &gettics ($pmin, $pmax, @xmult);
+   $xdataoffset = ($pmax - $pmin) * 0.02;
+  }
+  if ($active_win == 2) {
+   if ($dmmin == $dmmin_local && $dmmax == $dmmax_local) { next; }
+   $step = ($dmmax - $dmmin);
+   if ($x_cursor < $dmmin || $x_cursor > $dmmax) { next; }
+   $dmmin = $x_cursor - $step;
+   $dmmax = $x_cursor + $step;
+   if ($dmmin < $dmmin_local) { $dmmin = $dmmin_local; }
+   if ($dmmax > $dmmax_local) { $dmmax = $dmmax_local; }
+   $y_major_tic = &gettics ($dmmin, $dmmax, @ymult);
+   $ydataoffset = ($dmmax - $dmmin) * 0.1;
+  }
+  pgeras ();
+  &mainwindow($pgplot_dev); 
+  &snr_p_plot (); 
+  &snr_dm_plot (); 
+  &print_labels ();
+  $active_win = &change_active (($active_win+2)%3);
+  &plot_marked ($active_win);
+  next;
+ }
+
+ # zoom-in on Y
+ if ($ch_cursor =~ /[0\)]/) {
+  if ($active_win == 1 || $active_win == 2) {
+   $step = ($smax - $smin)/4.;
+   if ($step < 0.01) { next; }
+   if ($y_cursor < $smin || $y_cursor > $smax) { next; }
+   $smin = $y_cursor - $step;
+   $smax = $y_cursor + $step;
+   if ($smin < $smin_local) { $smin = $smin_local; }
+   if ($smax > $smax_local) { $smax = $smax_local; }
+   $s_major_tic = &gettics ($smin, $smax, @smult);
+   $sdataoffset = ($smax - $smin) * 0.1;
+  }
+  if ($active_win == 0) {
+   $step = ($dmmax - $dmmin)/4.;
+   if ($step < 0.01) { next; }
+   if ($y_cursor < $dmmin || $y_cursor > $dmmax) { next; }
+   $dmmin = $y_cursor - $step;
+   $dmmax = $y_cursor + $step;
+   if ($dmmin < $dmmin_local) { $dmmin = $dmmin_local; }
+   if ($dmmax > $dmmax_local) { $dmmax = $dmmax_local; }
+   $y_major_tic = &gettics ($dmmin, $dmmax, @ymult);
+   $ydataoffset = ($dmmax - $dmmin) * 0.1;
+  }
+  pgeras ();
+  &mainwindow($pgplot_dev); 
+  &snr_p_plot (); 
+  &snr_dm_plot (); 
+  &print_labels ();
+  $active_win = &change_active (($active_win+2)%3);
+  &plot_marked ($active_win);
+  next;
+ }
+
+ # zoom-out on Y
+ if ($ch_cursor =~ /[9\(]/) {
+  if ($active_win == 1 || $active_win == 2) {
+   if ($smin == $smin_local && $smax == $smax_local) { next; }
+   $step = ($smax - $smin);
+   if ($y_cursor < $smin || $y_cursor > $smax) { next; }
+   $smin = $y_cursor - $step;
+   $smax = $y_cursor + $step;
+   if ($smin < $smin_local) { $smin = $smin_local; }
+   if ($smax > $smax_local) { $smax = $smax_local; }
+   $s_major_tic = &gettics ($smin, $smax, @smult);
+   $sdataoffset = ($smax - $smin) * 0.1;
+  }
+  if ($active_win == 0) {
+   if ($dmmin == $dmmin_local && $dmmax == $dmmax_local) { next; }
+   $step = ($dmmax - $dmmin);
+   $dmmin = $y_cursor - $step;
+   $dmmax = $y_cursor + $step;
+   if ($y_cursor < $dmmin || $y_cursor > $dmmax) { next; }
+   if ($dmmin < $dmmin_local) { $dmmin = $dmmin_local; }
+   if ($dmmax > $dmmax_local) { $dmmax = $dmmax_local; }
+   $y_major_tic = &gettics ($dmmin, $dmmax, @ymult);
+   $ydataoffset = ($dmmax - $dmmin) * 0.1;
+  }
+  pgeras ();
+  &mainwindow($pgplot_dev); 
+  &snr_p_plot (); 
+  &snr_dm_plot (); 
+  &print_labels ();
+  $active_win = &change_active (($active_win+2)%3);
+  &plot_marked ($active_win);
+  next;
+ }
+
+ # plot the profile of the candidate
+ if ($ch_cursor =~ /[sS]/) {
+   &plot_candidate ($x_cursor, $y_cursor, $active_win); 
+   &winhelp();
+   next;
+ }
+
+ # mark the candidate
+ &get_point($x_cursor, $y_cursor, $active_win);
+
+} # while
+
+
+
+
+#######################################################################################
+#
+#
+#                            R O U T I N E S
+#
+#
+
+# plot points in main window
+sub mainwindow {
+
+local ($dev) = @_;
+
+pgsvp (0.07, 0.99, 0.07, 0.47);
+pgswin ($pmin - $xdataoffset, $pmax + $xdataoffset, $dmmin - $ydataoffset, $dmmax + $ydataoffset);
+pgslw (2);
+pgbox ("BCNTS", $x_major_tic, 5, "BCNTS", $y_major_tic, 5);
+pgmtxt ("B", 2.7, 0.5, 0.5, $xlabel);
+pgmtxt ("L", 2.7, 0.5, 0.5, $ylabel);
+pgsfs (2);
+
+#
+# grayscale plot
+#
+if ($plotview eq "gray") {
+
+# set gray scale map
+&grayscale ($dev);
+
+pgsfs (1);
+pgsls (1);
+
+foreach $j (@dm) {
+if ($j < $dmmin || $j > $dmmax) { next; }
+@periods = sort { ${$m{$j}}{$a} <=> ${$m{$j}}{$b} } keys %{$m{$j}};
+foreach (@periods) {
+  if ($_ < $pmin || $_ > $pmax) { next; }
+  if (${$m{$j}}{$_} >= $smin && ${$m{$j}}{$_} <= $smax) {
+   $color_index = 16 + int ( ((${$m{$j}}{$_} - $smin) * 15.5) / ($smax - $smin)); 
+   pgsci ($color_index);
+   pgpt1 ($_, $j, 17);
+  }
+}
+}
+
+} # end of grayscale plot
+
+#
+# plot of circles
+#
+if ($plotview eq "circ") {
+
+foreach $j (@dm) {
+if ($j < $dmmin || $j > $dmmax) { next; }
+@periods = sort { ${$m{$j}}{$a} <=> ${$m{$j}}{$b} } keys %{$m{$j}};
+foreach (@periods) {
+  if ($_ < $pmin || $_ > $pmax) { next; }
+  if (${$m{$j}}{$_} >= $smin && ${$m{$j}}{$_} <= $smax) {
+   $type = 20 + int ( ((${$m{$j}}{$_} - $smin) * 6.5) / ($smax - $smin));
+   pgpt1 ($_, $j, $type);
+  }
+}
+}
+
+} # end of plot of circles
+
+#
+# contour plot
+#
+if ($plotview eq "image") {
+
+#########################
+#
+# non-rectangular grid with my own plot function "translate"
+# plotted map looks bad
+#
+# @per = ();
+# foreach $j (@dm) {
+#  @p = keys %{$m{$j}};
+#  @per = (@per, @p);
+# }
+# @periods = sort { $a <=> $b } grep { $_ == $_ } @per; 
+# $psize = $#periods + 1;
+# $dmsize = $#dm + 1;
+#
+# $n=[];
+# for $j (0..$psize-1) { for $i (0..$dmsize-1) {
+#   if (exists ${$m{$dm[$i]}}{$periods[$j]}) { $$n[$j][$i] = ${$m{$dm[$i]}}{$periods[$j]}; }
+#    else { $$n[$j][$i] = 0.; }
+# } }
+#
+# @levels = (0., 1., 2., 3., 4., 5., 6.);
+# pgconx ($n, $psize, $dmsize, 1, $psize, 1, $dmsize, \@levels, $#levels + 1, \&translate);
+#
+###########################
+
+##########################
+#
+# Honestly there are too less points to make a nice plot
+# It does not look like contour map or image
+#
+ @per = ();
+ foreach $j (@dm) {
+  if ($j < $dmmin || $j > $dmmax) { next; }
+  @p = keys %{$m{$j}};
+  @perproc = (@perproc, @p);
+ }
+ @per = @perproc;
+ @periods = sort { $a <=> $b } grep { $_ == $_ } map { $_ = sprintf ("%.1f", $_) } @perproc; 
+ while ($periods[0] < $pmin) { shift @periods; }
+ while ($periods[$#periods] > $pmax) { pop @periods; }
+ $psize = ($periods[$#periods] - $periods[0]) * 10 + 2;
+ if ($psize - int($psize) > 0.5) { $psize = int($psize) + 1; } else { $psize = int($psize); }
+ $dmsize = (int ($dmmax) + 2 - int ($dmmin)) * 10 + 1;
+ $pstep = 0.1;
+ $dmstep = 0.1;
+ @tr = ($periods[0]-$pstep, $pstep, 0, int($dmmin)-$dmstep, 0, $dmstep);
+
+ $n=[];
+ @perproc = sort { $a <=> $b } grep { $_ == $_ } @per;
+ while ($perproc[0] < $pmin) { shift @perproc; }
+ while ($perproc[$#perproc] > $pmax) { pop @perproc; }
+ $psize = ($periods[$#periods] - $periods[0]) * 10 + 2;
+ for $j (0..$psize-1) { 
+   @dmproc = @dm;
+   for $i (0..$dmsize-1) {
+   $dm = $tr[3] + $i * $tr[5];
+   $dmval = &do_dm ($dm, $tr[3] + ($i + 1) * $tr[5]);
+   if ($dmval < 0 || $dmval < $dmmin || $dmval > $dmmax) { $$n[$j][$i] = 0.; }
+    else {
+      $pp = $tr[0] + $j * $tr[1];
+      $pval = &do_per ($pp);
+      if ($pval < 0) { $$n[$j][$i] = 0.; }
+       else { $$n[$j][$i] = &assign_snr ($pval, $dmval); }
+   }
+ } }
+
+# @levels = (4., 4.5, 5., 5.1, 5.2, 5.3, 5.4, 5.5, 5.6, 5.7, 5.8, 5.9, 6.);
+ @levels = (0., 1., 2., 3., 4., 5., 6.);
+
+#
+# contour
+#
+# pgconb ($n, $psize, $dmsize, 1, $psize-1, 1, $dmsize-1, \@levels, $#levels + 1, \@tr, 0.);
+# pgcont ($n, $psize, $dmsize, 1, $psize-1, 1, $dmsize-1, \@levels, $#levels + 1, \@tr);
+
+#
+# color image 
+#
+ pgsitf (0);
+ &setcolor ();
+ pgimag ($n, $psize, $dmsize, 1, $psize-1, 1, $dmsize-1, $smin, $smax, \@tr);
+
+} # plot image
+
+pgsci (1);
+
+}
+
+#
+# SNR - P plot
+#
+sub snr_p_plot {
+
+pgsvp (0.07, 0.52, 0.57, 0.93);
+pgswin ($pmin - $xdataoffset, $pmax + $xdataoffset, $smin - $sdataoffset, $smax + $sdataoffset);
+pgslw (2);
+pgbox ("BCNTS", $x_major_tic, 5, "BCNTS", $s_major_tic, 5);
+pgmtxt ("B", 2.7, 0.5, 0.5, $xlabel);
+pgmtxt ("L", 2.7, 0.5, 0.5, $slabel);
+foreach $j (@dm) {
+ if ($j < $dmmin || $j > $dmmax) { next; }
+ @periods = keys %{$m{$j}};
+ foreach (@periods) {
+  if ($_ < $pmin || $_ > $pmax) { next; }
+  if (${$m{$j}}{$_} >= $smin && ${$m{$j}}{$_} <= $smax) {
+   pgpt1 ($_, ${$m{$j}}{$_}, 20);
+  }
+ }
+}
+
+}
+
+#
+# SNR - DM plot
+#
+sub snr_dm_plot {
+
+pgsvp (0.54, 0.99, 0.57, 0.93);
+pgswin ($dmmin - $ydataoffset, $dmmax + $ydataoffset, $smin - $sdataoffset, $smax + $sdataoffset);
+pgslw (2);
+pgbox ("BCNTS", $y_major_tic, 5, "BCTS", $s_major_tic, 5);
+pgmtxt ("B", 2.7, 0.5, 0.5, $ylabel);
+#pgmtxt ("L", 2.7, 0.5, 0.5, $slabel);
+foreach $j (@dm) {
+ if ($j < $dmmin || $j > $dmmax) { next; }
+ @periods = keys %{$m{$j}};
+ foreach (@periods) {
+  if ($_ < $pmin || $_ > $pmax) { next; }
+  if (${$m{$j}}{$_} >= $smin && ${$m{$j}}{$_} <= $smax) {
+   pgpt1 ($j, ${$m{$j}}{$_}, 20);
+  }
+ }
+}
+
+}
+
+# unique subroutine to output errors
+# one input parameter (string): the error message
+sub error {
+ my ($error) = @_;
+ print "Error: $error\n";
+ exit 1;
+}
+
+# help
+sub help {
+ local ($prg) = @_;
+ $prg = `basename $prg`;
+ chomp $prg;
+ print "Usage: $prg [options] <sft | ffa file>\n";
+ print "        -p  <dev>   - pgplot device\n";
+ print "        -s1 <smin>  - minimum S/N value\n";
+ print "        -s2 <smax>  - maximum S/N value\n";
+ print "        -d1 <dmmin> - minimum DM value\n";
+ print "        -d2 <dmmax> - maximum DM value\n";
+ print "        -p1 <pmin>  - minimum period (in ms)\n";
+ print "        -p2 <pmax>  - maximum period (in ms)\n";
+ print "        -ref <file> - reference file to read the header, usually filterbank-file,\n";
+ print "                      name of the tim-files is formed by adding DM-value and tim-suffix\n";
+ print "        -circ       - to plot with circles\n";
+ print "        -h          - plot this help\n";
+}
+
+# window help
+sub winhelp {
+ print "\n";
+ print "Help:\n";
+ print "x, X, q, Q, mouse right button  ->  quit\n";
+ print "g, G  ->  print cursor coordinates\n";
+ print "r, R  ->  refresh main plot\n";
+ print "a, A, mouse left button  ->  print and mark value of the closest candidate\n";
+ print "TAB  ->  change active window\n";
+ print "SPACE  ->  mark the point with highest S/N in the current view\n";
+ print "p, P  ->  save plot to postscript file\n";
+ print "+, =  ->  zoom-in in x-axis\n";
+ print "-, _  ->  zoom-out in x-axis\n";
+ print "0, )  ->  zoom-in in y-axis\n";
+ print "9, (  ->  zoom-out in y-axis\n";
+ print "s, S  ->  plot the profile of the candidate in the separate window\n";
+ print "h, H  ->  this help\n";
+ print "\n";
+}
+
+# calc min
+sub min {
+ local (@arr) = sort { $a <=> $b } @_;
+ return $arr[0];
+}
+
+# calc max
+sub max {
+ local (@arr) = sort { $b <=> $a } @_;
+ return $arr[0];
+}
+
+# get major tic
+sub gettics {
+ local ($min, $max, @mult) = @_;
+ local $beg = int(($max - $min)/5.);
+ local $end = int(($max - $min)/4.);
+ for ($j=0; $j<=$#mult+1; $j++) {
+  for ($i=$beg; $i<=$end; $i++) {
+   if ( (int($i/$mult[$j]))*$mult[$j] == $i ) { return $i; }
+  }
+ }
+ return $end;
+}
+
+# forming dmlist
+sub dmlist {
+ my ($dmvalue) = @_;
+ push @dm, $dmvalue;
+ return "#\ DM\ \=\ $dmvalue\ pc\/cm\^3";
+}
+
+# external plotting function for pgplot to translate
+# indexes to world-wide coords
+sub translate {
+ local ($vis, $x, $y, $z) = @_;
+  $pind = int ($x);
+  $dmind = int ($y);
+  if ($x - $pind > 0.5) { $pind += 1; }
+  if ($y - $dmind > 0.5) { $dmind += 1; }
+  $pind -= 1; $dmind -= 1;
+  $xworld = $periods[$pind];
+  $yworld = $dm[$dmind];
+ if ($vis == 0) {
+  pgmove ($xworld, $yworld);
+ } else {
+  pgdraw ($xworld, $yworld);
+ }
+}
+
+# check if current round DM value is the most close to the
+# real DM value
+sub do_dm {
+ local ($cur, $nxt) = @_;
+ local $val;
+ if ($#dmproc < 0) { return -1; }
+  else {
+   $diff_cur = abs ($dmproc[0] - $cur);
+   $diff_nxt = abs ($dmproc[0] - $nxt);
+   if ($diff_nxt < $diff_cur) { return -1; }
+    else { $val = shift @dmproc; return $val; }
+  }
+}
+
+# check if this period is in the list
+sub do_per {
+ local ($pr) = @_;
+ foreach $q (@periods) {
+  if ($q < $pmin || $q > $pmax) { next; }
+  if ($pr == $q) { return $q; }
+ }
+ return -1;
+}
+
+# assign snr value to 2D array
+sub assign_snr {
+ local ($xval, $yval) = @_;
+ local @pcand = ();
+ local $snr = 0.;
+ local $count = 0;
+
+ foreach $p (@perproc) {
+  $np = sprintf ("%.1f", $p);
+  if ($xval == $np) { push @pcand, $p; }
+ }
+ if ($#pcand < 0) { return 0.; }
+ foreach $p (@pcand) {
+  if (exists ${$m{$yval}}{$p}) { $count++; $snr = $snr + ${$m{$yval}}{$p}; }
+ }
+ if ($count != 0) { $snr /= $count; }
+ return $snr;
+}
+
+# set up color table for 2D plotting
+sub setcolor {
+ my ($l, $r, $g, $b) = lut_data ("idl5", 0, "ramp");
+ pgctab ($l->get_dataref, $r->get_dataref, $g->get_dataref, $b->get_dataref, $l->getdim(0), 1.0, 0.5);
+ undef $l; undef $r; undef $g; undef $b;
+}
+
+# set gray scale colors
+sub grayscale {
+ local ($dev) = @_;
+ $step = 1./15.;
+ if ($dev =~ /\.ps/) {
+  for ($i=0; $i<16; $i++) {
+   $val = (15 - $i) * $step;
+   pgscr (16+$i, $val, $val, $val);
+  }
+ } else {
+    for ($i=0; $i<16; $i++) {
+     $val = $i * $step;
+     pgscr (16+$i, $val, $val, $val);
+    }
+   }
+}
+
+# mark point in all windows
+sub mark_point {
+ local ($p, $dm, $snr, $active, $color) = @_;
+
+ pgqci ($ci);
+ pgsci ($color);
+
+ # main plot
+ pgsvp (0.07, 0.99, 0.07, 0.47);
+ pgswin ($pmin - $xdataoffset, $pmax + $xdataoffset, $dmmin - $ydataoffset, $dmmax + $ydataoffset);
+ if ($plotview eq "circ") { pgpt1 ($p, $dm, 20 + int ( ((${$m{$dm}}{$p} - $smin) * 6.5) / ($smax - $smin)) ); }
+  else { pgpt1 ($p, $dm, 17); }
+ # SNR - P plot
+ pgsvp (0.07, 0.52, 0.57, 0.93);
+ pgswin ($pmin - $xdataoffset, $pmax + $xdataoffset, $smin - $sdataoffset, $smax + $sdataoffset);
+ pgpt1 ($p, ${$m{$dm}}{$p}, 20);
+ # SNR - DM plot
+ pgsvp (0.54, 0.99, 0.57, 0.93);
+ pgswin ($dmmin - $ydataoffset, $dmmax + $ydataoffset, $smin - $sdataoffset, $smax + $sdataoffset);
+ pgpt1 ($dm, ${$m{$dm}}{$p}, 20);
+ pgsci ($ci);
+ &change_active (($active+2)%3);
+}
+
+# find the point with largest SNR in the current view and mark it
+sub mark_max {
+ local ($active) = @_;
+ local $snrmax = undef, $imax, $jmax;
+ foreach $j (keys %m) {
+  if ($j < $dmmin || $j > $dmmax) { next; }
+  foreach $i (keys %{$m{$j}}) {
+   if ($i < $pmin || $i > $pmax) { next; }
+   unless ($snrmax) { $snrmax = ${$m{$j}}{$i}; $imax = $i; $jmax = $j; }
+   if (${$m{$j}}{$i} > $snrmax) { $snrmax = ${$m{$j}}{$i}; $imax = $i; $jmax = $j; }
+  }
+ }
+ &mark_point ($imax, $jmax, $snrmax, $active, 2);
+ print "   Max -> P: $imax   DM: $jmax   S/N: $snrmax\n";
+}
+
+# plot all marked points
+sub plot_marked {
+ local ($active) = @_;
+ local @p, @disp = keys %marked;
+ foreach $j (@disp) {
+  @p = keys %{$marked{$j}}; 
+  foreach $i (@p) {
+   &mark_point ($i, $j, ${$marked{$j}}{$i}, $active, 4);
+  }
+ }
+}
+
+# find closest point to the cursor and print its value
+sub get_point {
+ local ($xcur, $ycur, $active) = @_;
+ local $diff, $diff_min = undef, $jmin, $permin;
+
+ foreach $j (@dm) {
+ if ($j < $dmmin || $j > $dmmax) { next; }
+ foreach (keys %{$m{$j}}) {
+   if ($_ < $pmin || $_ > $pmax) { next; }
+   if (${$m{$j}}{$_} >= $smin && ${$m{$j}}{$_} <= $smax) {
+    if ($active == 0) {
+      $diff = sqrt ( ($x_cursor - $_) * ($x_cursor - $_) + ($y_cursor - $j) * ($y_cursor - $j) );
+    } elsif ($active == 1) {
+      $diff = sqrt ( ($x_cursor - $_) * ($x_cursor - $_) + ($y_cursor - ${$m{$j}}{$_}) * ($y_cursor - ${$m{$j}}{$_}) );
+    } elsif ($active == 2) {
+      $diff = sqrt ( ($x_cursor - $j) * ($x_cursor - $j) + ($y_cursor - ${$m{$j}}{$_}) * ($y_cursor - ${$m{$j}}{$_}) );
+    }
+    unless ($diff_min) { $diff_min = $diff; $permin = $_; $jmin = $j; }
+    if ($diff < $diff_min) { $diff_min = $diff; $permin = $_; $jmin = $j; }
+   }
+ }
+}
+
+ print "   Point -> P: $permin   DM: $jmin   S/N: ${$m{$jmin}}{$permin}\n";
+ &mark_point ($permin, $jmin, ${$m{$jmin}}{$permin}, $active, 4);
+ # add this point to the hash of marked points
+ ${$marked{$jmin}}{$permin} = ${$m{$jmin}}{$permin};
+}
+
+# change active window
+sub change_active {
+ local ($active) = @_;
+ $new_active = ($active + 1)%3;
+ pgqci ($ci);
+ pgsci (0);
+ pgmtxt ("T", -1., 0.005, 0., "a");
+ pgsci ($ci);
+ if ($new_active == 0) {
+  pgsvp (0.07, 0.99, 0.07, 0.47);
+  pgswin ($pmin - $xdataoffset, $pmax + $xdataoffset, $dmmin - $ydataoffset, $dmmax + $ydataoffset);
+ } elsif ($new_active == 1) {
+  pgsvp (0.07, 0.52, 0.57, 0.93);
+  pgswin ($pmin - $xdataoffset, $pmax + $xdataoffset, $smin - $sdataoffset, $smax + $sdataoffset);
+ } elsif ($new_active == 2) {
+  pgsvp (0.54, 0.99, 0.57, 0.93);
+  pgswin ($dmmin - $ydataoffset, $dmmax + $ydataoffset, $smin - $sdataoffset, $smax + $sdataoffset);
+ } else { 
+  print "Unknown active window! DM-Period window is active now.\n";
+  pgsvp (0.07, 0.99, 0.07, 0.47);
+  pgswin ($pmin - $xdataoffset, $pmax + $xdataoffset, $dmmin - $ydataoffset, $dmmax + $ydataoffset);
+ }
+
+ pgqci ($ci);
+ pgsci (3);
+ pgmtxt ("T", -1., 0.005, 0., "a"); # mark this window as active
+ pgsci ($ci);
+ return $new_active;
+}
+
+# print coordinates of the cursor
+sub print_coords {
+ local ($xc, $yc, $active) = @_;
+ printf ("%s: %.6f   %s: %.6f\n", $active == 2 ? "DM" : "P" , $xc, $active == 0 ? "DM" : "S/N", $yc);
+}
+
+# print labels
+sub print_labels {
+ pgsvp (0.07, 0.99, 0.07, 0.99);
+ pgmtxt ("T", -1., 0., 0., $Telescope . "   " . "Source: " . $source . "   " . "MJD: " . $mjd . "   " . "Date: " . $date);
+}
+
+###################
+#
+# Plot Candidate
+#
+#
+sub plot_candidate {
+ local ($xc, $yc, $active) = @_;
+ local $diff, $diff_min = undef, $jmin, $permin;
+ local $period, $tsamp, $headersize, $marked_size;
+
+ $marked_size = keys (%marked);
+ if ($marked_size <= 0) { print "No marked candidates to plot!\n"; return; }
+
+ foreach $j (keys %marked) {
+ if ($j < $dmmin || $j > $dmmax) { next; }
+ foreach (keys %{$marked{$j}}) {
+   if ($_ < $pmin || $_ > $pmax) { next; }
+   if (${$marked{$j}}{$_} >= $smin && ${$marked{$j}}{$_} <= $smax) {
+    if ($active == 0) {
+      $diff = sqrt ( ($xc - $_) * ($xc - $_) + ($yc - $j) * ($yc - $j) );
+    } elsif ($active == 1) {
+      $diff = sqrt ( ($xc - $_) * ($xc - $_) + ($yc - ${$marked{$j}}{$_}) * ($yc - ${$marked{$j}}{$_}) );
+    } elsif ($active == 2) {
+      $diff = sqrt ( ($xc - $j) * ($xc - $j) + ($yc - ${$marked{$j}}{$_}) * ($yc - ${$marked{$j}}{$_}) );
+    }
+    unless ($diff_min) { $diff_min = $diff; $permin = $_; $jmin = $j; }
+    if ($diff < $diff_min) { $diff_min = $diff; $permin = $_; $jmin = $j; }
+   }
+ }
+}
+if ($reffile) { 
+ $period = $permin * 1000. * 1000. * 2.; # double the period and convert it to nanoseconds
+ $tim_glob = $reffile . "." . int($jmin) . ".*" . ".tim";
+ @tim = glob ("$tim_glob");
+ $timfile = $tim[0];
+
+ if ($timfile) {
+ 
+  $headersize = `header $timfile -headersize`; chomp $headersize;
+  $tsamp = `header $timfile -tsamp`; chomp $tsamp;
+  $nsamples = `header $timfile -nsamples`; chomp $nsamples;
+  $tobs = `header $timfile -tobs`; chomp $tobs;
+  $tsamp *= 1000.; # convert it to nanoseconds
+  
+  system ("knife -q --header $headersize -t $tsamp -p $period --noend --prof $timfile.fld $timfile");
+  $mean = `dt --header $headersize -i -w 1000000 $timfile \| grep \\<x\\> | awk \'{\print \$4\}\' -`; chomp $mean;
+  $sigma = `dt --header $headersize -i -w 1000000 $timfile \| grep sigma | awk \'{\print \$3\}\' -`; chomp $sigma;
+  $fldfile = "$timfile.fld";
+  if (-e $fldfile && -B $fldfile) {
+   $bufsize = -s $fldfile;
+   if ($bufsize == 0) { print "File \"$fldfile\" has zero size!\n"; return; }
+   open (FLD, $fldfile);
+   read (FLD, $buffer, $bufsize);
+   close (FLD);
+   unlink ($fldfile); # remove temporary fld-file
+   @data = unpack ("f*", $buffer);
+   # plot profile
+   $id2 = &plot_profile ($tsamp/1000./1000., $nsamples, $tobs, $mean, $sigma, $permin, $jmin, ${$m{$jmin}}{$permin}, $timfile, @data);
+   pgclos ();
+   pgslct ($id0);
+   return;
+  }
+ } else {
+  print "Can not find file \"$tim_glob\"!\n";
+  return;
+ }
+} else {
+ print "No reffile is pointed out! Use -ref option.\n";
+ return;
+}
+
+}
+
+# plot profile
+sub plot_profile {
+ my ($tsamp, $nsamples, $tobs, $mean, $sigma, $period, $dm, $snr, $timfile, @data) = @_;
+ my @x = map { $_ *= $tsamp; } (0 .. $#data);
+ my $nbins = $#data + 1;
+ $sigma /= sqrt ($nsamples / $nbins);
+ $tobs = int ($tobs);
+ $timfile = `basename $timfile`; chomp $timfile;
+ my @y = map { $_ = ($_ - $mean)/$sigma } @data;
+ my $xmin, $ymin, $xtic, $ytic, $xoffset, $yoffset, $xlabel, $ylabel;
+ my $x_cursor, $y_cursor, $ch_cursor;
+ my @ylocal = @y;
+ my @xlocal = @x;
+ my $sigma_local = $sigma;
+
+ my $psfile = "$source.dm$dm.p$period.ps";
+
+ my $samp = 1;
+ my $res = ($tsamp * 1000.) * $samp;
+
+ $ymin = min (@y);
+ $ymax = max (@y);
+ $xmin = $x[0];
+ $xmax = $x[$#x];
+ $xmin_local = $xmin;
+ $xmax_local = $xmax;
+ $ymin_local = $ymin;
+ $ymax_local = $ymax;
+
+ $xtic = &gettics ($xmin, $xmax, @xmult);
+ $ytic = &gettics ($ymin, $ymax, @ymult);
+ $xoffset = ($xmax - $xmin) * 0.02;
+ $yoffset = ($ymax - $ymin) * 0.1;
+ $xproflabel = "Time (ms)";
+ $yproflabel = "Flux density (rms)";
+
+ $char_size = 1.;
+
+ $id2 = pgopen ($pgplot_dev);
+ pgslct ($id2);
+ pgask (0);
+ pgsch ($char_size);
+
+ &profile_window ($xmin, $xmax, $xofset, $ymin, $ymax, $yoffset, $xtic, $ytic, $xproflabel, $yproflabel, $nbins, $period, $dm, $snr, $tobs, $tsamp, $samp, $res, $timfile, $psfile, \@x, \@y);
+ &winhelp2();
+
+ while (1) {
+  # look for cursor input
+  pgcurs ($x_cursor, $y_cursor, $ch_cursor);
+      
+  # to quit
+  if ($ch_cursor =~ /[xXqQ]/) {
+   last;
+  } 
+
+ # to help
+ if ($ch_cursor =~ /[hH]/) { &winhelp2(); next; }
+
+ # get value of closest candidate
+ if ($ch_cursor =~ /[gG]/) { 
+  &print_coords2 ($x_cursor, $y_cursor);
+  next;
+ }
+
+ # save to postscript-file
+ if ($ch_cursor =~ /[pP]/) {
+  $id3 = pgopen ($psfile);
+  pgslct ($id3); 
+  pgsch ($char_size);
+  &profile_window ($xmin, $xmax, $xofset, $ymin, $ymax, $yoffset, $xtic, $ytic, $xproflabel, $yproflabel, $nbins, $period, $dm, $snr, $tobs, $tsamp, $samp, $res, $timfile, $psfile, \@x, \@y);
+  pgclos ();
+  pgslct ($id2);
+  next;
+ }
+
+# average by 2
+ if ($ch_cursor =~ /[sS]/) { 
+  if ($samp * 2 >= $nbins) { next; }
+  $samp *= 2;
+  @y = &profile_average ($samp, @ylocal);
+  $sigma = $sigma_local / sqrt ($samp);
+  @y = map { $_ *= sqrt ($samp); } @y;
+  @x = map { $_ *= ($tsamp * $samp); } (0 .. $#y);
+  $res = ($tsamp * 1000.) * $samp;
+  $ymin = min (@y);
+  $ymax = max (@y);
+  $xmin = $x[0];
+  $xmax = $x[$#x];
+
+  $xtic = &gettics ($xmin, $xmax, @xmult);
+  $ytic = &gettics ($ymin, $ymax, @ymult);
+  $xoffset = ($xmax - $xmin) * 0.02;
+  $yoffset = ($ymax - $ymin) * 0.1;
+  pgeras();
+  &profile_window ($xmin, $xmax, $xofset, $ymin, $ymax, $yoffset, $xtic, $ytic, $xproflabel, $yproflabel, $nbins, $period, $dm, $snr, $tobs, $tsamp, $samp, $res, $timfile, $psfile, \@x, \@y);
+  next;
+ }
+
+# average by 10
+ if ($ch_cursor =~ /[tT]/) { 
+  if ($samp * 10 >= $nbins) { next; }
+  $samp *= 10;
+  @y = &profile_average ($samp, @ylocal);
+  $sigma = $sigma_local / sqrt ($samp);
+  @y = map { $_ *= sqrt ($samp); } @y;
+  @x = map { $_ *= ($tsamp * $samp); } (0 .. $#y);
+  $res = ($tsamp * 1000.) * $samp;
+  $ymin = min (@y);
+  $ymax = max (@y);
+  $xmin = $x[0];
+  $xmax = $x[$#x];
+
+  $xtic = &gettics ($xmin, $xmax, @xmult);
+  $ytic = &gettics ($ymin, $ymax, @ymult);
+  $xoffset = ($xmax - $xmin) * 0.02;
+  $yoffset = ($ymax - $ymin) * 0.1;
+  pgeras();
+  &profile_window ($xmin, $xmax, $xofset, $ymin, $ymax, $yoffset, $xtic, $ytic, $xproflabel, $yproflabel, $nbins, $period, $dm, $snr, $tobs, $tsamp, $samp, $res, $timfile, $psfile, \@x, \@y);
+  next;
+ }
+
+# return to original resolution
+ if ($ch_cursor =~ /[rR]/) { 
+  $samp = 1;
+  @y = @ylocal;
+  $sigma = $sigma_local;
+  @x = map { $_ *= $tsamp; } (0 .. $#y);
+  $res = ($tsamp * 1000.) * $samp;
+  $ymin = min (@y);
+  $ymax = max (@y);
+  $xmin = $x[0];
+  $xmax = $x[$#x];
+
+  $xtic = &gettics ($xmin, $xmax, @xmult);
+  $ytic = &gettics ($ymin, $ymax, @ymult);
+  $xoffset = ($xmax - $xmin) * 0.02;
+  $yoffset = ($ymax - $ymin) * 0.1;
+  pgeras();
+  &profile_window ($xmin, $xmax, $xofset, $ymin, $ymax, $yoffset, $xtic, $ytic, $xproflabel, $yproflabel, $nbins, $period, $dm, $snr, $tobs, $tsamp, $samp, $res, $timfile, $psfile, \@x, \@y);
+  next;
+ }
+
+ # zoom-in
+ if ($ch_cursor =~ /[\+\=]/) {
+  $step = ($xmax - $xmin)/4.;
+  if ($step < 2*$tsamp) { next; }
+  if ($x_cursor < $xmin || $x_cursor > $xmax) { next; }
+  $xmin = $x_cursor - $step;
+  $xmax = $x_cursor + $step;
+  if ($xmin < $xmin_local) { $xmin = $xmin_local; }
+  if ($xmax > $xmax_local) { $xmax = $xmax_local; }
+  $xtic = &gettics ($xmin, $xmax, @xmult);
+  $xoffset = ($xmax - $xmin) * 0.02;
+  for ($i=0; $i<=$#x; $i++) {
+   if ($x[$i] < $xmin) { next; }
+   $imin = $i;
+   last;
+  }
+  for ($i=$imin; $i<=$#x; $i++) {
+   if ($x[$i] > $xmax) { last; }
+   $imax = $i;
+  }
+  $ymin = $y[$imin]; $ymax = $y[$imin];
+  for ($i=$imin; $i<=$imax; $i++) {
+   if ($y[$i] < $ymin) { $ymin = $y[$i]; }
+   if ($y[$i] > $ymax) { $ymax = $y[$i]; }
+  }
+  $ytic = &gettics ($ymin, $ymax, @ymult);
+  $yoffset = ($ymax - $ymin) * 0.1;
+  pgeras ();
+  my @xx = @x[$imin .. $imax];
+  my @yy = @y[$imin .. $imax];
+  &profile_window ($xmin, $xmax, $xofset, $ymin, $ymax, $yoffset, $xtic, $ytic, $xproflabel, $yproflabel, $nbins, $period, $dm, $snr, $tobs, $tsamp, $samp, $res, $timfile, $psfile, \@xx, \@yy);
+  next;
+ }
+
+ # zoom-out
+ if ($ch_cursor =~ /[\-\_]/) {
+  if ($xmin == $xmin_local && $xamx == $xmax_local) { next; }
+  $step = ($xmax - $xmin);
+  if ($x_cursor < $xmin || $x_cursor > $xmax) { next; }
+  $xmin = $x_cursor - $step;
+  $xmax = $x_cursor + $step;
+  if ($xmin < $xmin_local) { $xmin = $xmin_local; }
+  if ($xmax > $xmax_local) { $xmax = $xmax_local; }
+  $xtic = &gettics ($xmin, $xmax, @xmult);
+  $xoffset = ($xmax - $xmin) * 0.02;
+  for ($i=0; $i<=$#x; $i++) {
+   if ($x[$i] < $xmin) { next; }
+   $imin = $i;
+   last;
+  }
+  for ($i=$imin; $i<=$#x; $i++) {
+   if ($x[$i] > $xmax) { last; }
+   $imax = $i;
+  }
+  $ymin = $y[$imin]; $ymax = $y[$imin];
+  for ($i=$imin; $i<=$imax; $i++) {
+   if ($y[$i] < $ymin) { $ymin = $y[$i]; }
+   if ($y[$i] > $ymax) { $ymax = $y[$i]; }
+  }
+  $ytic = &gettics ($ymin, $ymax, @ymult);
+  $yoffset = ($ymax - $ymin) * 0.1;
+  pgeras ();
+  my @xx = @x[$imin .. $imax];
+  my @yy = @y[$imin .. $imax];
+  &profile_window ($xmin, $xmax, $xofset, $ymin, $ymax, $yoffset, $xtic, $ytic, $xproflabel, $yproflabel, $nbins, $period, $dm, $snr, $tobs, $tsamp, $samp, $res, $timfile, $psfile, \@xx, \@yy);
+  next;
+ }
+
+ # change ymin up to 10%
+ if ($ch_cursor =~ /[\ ]/) {
+  $ymin += 0.1 * ($ymax - $ymin);
+  $ytic = &gettics ($ymin, $ymax, @ymult);
+  $yoffset = ($ymax - $ymin) * 0.1;
+  pgeras ();
+  my @xx = @x;
+  my @yy = @y;
+  &profile_window ($xmin, $xmax, $xofset, $ymin, $ymax, $yoffset, $xtic, $ytic, $xproflabel, $yproflabel, $nbins, $period, $dm, $snr, $tobs, $tsamp, $samp, $res, $timfile, $psfile, \@xx, \@yy);
+  next;
+ }
+
+ # change ymin down to 10%
+ if ($ch_cursor =~ /[\t]/) {
+  $ymin -= 0.1 * ($ymax - $ymin);
+  $ytic = &gettics ($ymin, $ymax, @ymult);
+  $yoffset = ($ymax - $ymin) * 0.1;
+  pgeras ();
+  my @xx = @x;
+  my @yy = @y;
+  &profile_window ($xmin, $xmax, $xofset, $ymin, $ymax, $yoffset, $xtic, $ytic, $xproflabel, $yproflabel, $nbins, $period, $dm, $snr, $tobs, $tsamp, $samp, $res, $timfile, $psfile, \@xx, \@yy);
+  next;
+ }
+
+ # change ymax up to 10%
+ if ($ch_cursor =~ /[1\!]/) {
+  $ymax += 0.1 * ($ymax - $ymin);
+  $ytic = &gettics ($ymin, $ymax, @ymult);
+  $yoffset = ($ymax - $ymin) * 0.1;
+  pgeras ();
+  my @xx = @x;
+  my @yy = @y;
+  &profile_window ($xmin, $xmax, $xofset, $ymin, $ymax, $yoffset, $xtic, $ytic, $xproflabel, $yproflabel, $nbins, $period, $dm, $snr, $tobs, $tsamp, $samp, $res, $timfile, $psfile, \@xx, \@yy);
+  next;
+ }
+
+ # change ymax down to 10%
+ if ($ch_cursor =~ /[2\@]/) {
+  $ymax -= 0.1 * ($ymax - $ymin);
+  $ytic = &gettics ($ymin, $ymax, @ymult);
+  $yoffset = ($ymax - $ymin) * 0.1;
+  pgeras ();
+  my @xx = @x;
+  my @yy = @y;
+  &profile_window ($xmin, $xmax, $xofset, $ymin, $ymax, $yoffset, $xtic, $ytic, $xproflabel, $yproflabel, $nbins, $period, $dm, $snr, $tobs, $tsamp, $samp, $res, $timfile, $psfile, \@xx, \@yy);
+  next;
+ }
+
+ return $id2;
+}
+
+}
+
+# profile help
+sub winhelp2 {
+ print "\n";
+ print "Help:\n";
+ print "x, X, q, Q, a, A, mouse buttons  ->  quit\n";
+ print "g, G  ->  print cursor coordinates\n";
+ print "p, P  ->  save plot to postscript file\n";
+ print "s, S  ->  consequitive averaging by 2 adjacent samples\n";
+ print "t, T  ->  consequitive averaging by 10 adjacent samples\n";
+ print "r, R  ->  return to original resolution\n";
+ print "+, =  ->  zoom-in\n";
+ print "-, _  ->  zoom-out\n";
+ print "SPACE ->  change ymin value up to 10% of the range\n";
+ print "TAB   ->  change ymin value down to 10% of the range\n";
+ print "1, !  ->  change ymax value up to 10% of the range\n";
+ print "2, @  ->  change ymax value down to 10% of the range\n";
+ print "h, H  ->  this help\n";
+ print "\n";
+}
+
+# print coordinates of the cursor
+sub print_coords2 {
+ local ($xc, $yc) = @_;
+ printf ("Time (ms): %.6f   Flux (rms): %.6f\n", $xc, $yc);
+}
+
+# plot profile window
+sub profile_window {
+ my ($xmin, $xmax, $xofset, $ymin, $ymax, $yoffset, $xtic, $ytic, $xproflabel, $yproflabel, $nbins, $period, $dm, $snr, $tobs, $tsamp, $samp, $res, $timfile, $psfile, $x, $y) = @_;
+ pgsvp (0.07, 0.99, 0.07, 0.86);
+ pgswin ($xmin - $xoffset, $xmax + $xoffset, $ymin - $yoffset, $ymax + $yoffset);
+ pgslw (2);
+ pgbox ("BCNTS", $xtic, 5, "BCNTS", $ytic, 5);
+ pgmtxt ("B", 2.7, 0.5, 0.5, $xproflabel);
+ pgmtxt ("L", 2.7, 0.5, 0.5, $yproflabel);
+ pgsfs (2);
+ pgline ($#{$x}+1, $x, $y);
+ pgmtxt ("T", 4.5, 0., 0., "FFA Trial Candidate: P = $period ms  DM = $dm cm\\u-3\\dpc  S/N = $snr");
+ pgmtxt ("T", 3.3, 0., 0., "$Telescope   Source: $source   MJD: $mjd   Date: $date");
+ pgmtxt ("T", 2.2, 0., 0., "Folded $tobs s  t\\dsmp\\u: " . $tsamp*1000. . "\\gm\\f s  N\\dbins\\u: $nbins   Averaged by $samp samples ($res \\gm\\f s)  N\\dbins\\u: " . int ($nbins/$samp));
+ pgmtxt ("T", 0.7, 0., 0., "File: $timfile  Postscript: $psfile");
+} 
+
+# average
+sub profile_average {
+ my ($aver, @array) = @_;
+ my $size = $#array + 1;
+ my $newsize = int ($size / $aver);
+ my @newarray = ();
+ 
+ for ($i=0, $k=0; $k<$newsize; $i+=$aver, $k++) {
+  $sum = 0.;
+  for ($j=$i; $j<$i+$aver; $j++) { $sum += $array[$j]; }
+  push @newarray, ($sum/$aver);
+ }
+ return @newarray;
+}

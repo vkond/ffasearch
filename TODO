@@ -1,0 +1,39 @@
+
+TODO:
+-----
+
+1) block iteration on large files and running FFA on every individual
+   block and then combine the search results. It allows to fix (or make worse) 
+   period resolution; 
+   now it is working only for first block - I need to implement the iteration process
+   command line options are --periodres or --mres
+   this is issue 2a) from README
+
+2) the way how I calculate the sigma, is it good or not?
+   I calculate sigma on every period without taking into account the peak and surrounding counts
+   other ways:
+     - calculate sigma once on the raw-data (several windows to avoid RFIs)
+     - take into account the width of the pulse - duty cycle
+     - calculate sigma from chi-squared
+     - implement all this (different options?) just to compare results
+
+3) To plot double-period rather than single to avoid cutting the pulse
+   I think it's not necessary here - during the FFA we keep only profiles that are folded
+   with the true period (rather than with doubled ones).
+   But probably we need to have another program that will read obtained *.ffa file and make
+   the same plot with doubled period, or plot more than 3 candidates, etc.
+   I would not like to put a lot of different stuff into the ffasearch program
+
+4) the last period value in one FFA transaction is the same as the first period value in
+   the next transaction. What I can do, and how bad is it?
+
+5) The dosnr.cpp code now is upgraded to do smoothing rather than averaging!
+   This affects the plotting as well, so I have to:
+    - cmd option to choose either averaging (extra) or smoothing (extra)
+    - to choose range of extra averaging (smoothing) rather than the max averaging value
+    - update plotting functions as well to operate well for both averaging and smoothing
+      Please, note that in both cases we are dealing with the different duty cycles and
+      SNR will be maximum when all the pulse energy is accumulated within 1 sample, so
+      the profile will be look like noisy spike and there will be a small (usually)
+      number of points in a period. So, this is a thing to think about
+

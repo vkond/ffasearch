@@ -1,0 +1,22 @@
+Nov 29, 2007
+------------
+
+*) Correct the period values (there was an error in formula)
+actually the error is in Staelin's paper as well
+
+*) pbins options now means the upper limit on extra everaging OR maximum duty cycle
+   I am checking the candidates from the lowest duty cycle for mbins and then increase
+   averaging by 1 till pbins
+
+*) In .ffa and .sft files I keep also duty cycle (DC) in percents (i.e. pbins)
+
+*) Phase is in degrees now
+
+*) Improving the code itself to make FFA run faster (though, who knows?..)
+
+*) Sifting of the candidates
+   in the final list now there are a lot of candidates of the same nature with a little bit
+   different period, etc. I need to leave on the final list only the candidates that are not 
+   related to each other. Probably, I have to write another program for this -- scripts/ffadmplot
+
+*) Implemented reading of SIGPROC format
