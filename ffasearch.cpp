@@ -70,7 +70,7 @@ void planning (double plow, double phigh, double tres, int nbins, int mbins, int
    }
    if (p0 == p0low) { Mmax = M; Mp0max = M * p0 * mbins; }
    if (M > Mmax) Mmax = M;
-   if (M * p0 > Mp0max) Mp0max = M * p0 * mbins;
+   if (M * p0 * mbins > Mp0max) Mp0max = M * p0 * mbins;
   } // for p0
   if ((Nsamples/nbins) > Mp0max) Mp0max = (unsigned long)(Nsamples/nbins);
  } else { Mmax = Nsamples; Mp0max = Mmax * p0high * mbins; }  // when is_period_res = true, Nsamples = M is the planning function parameters
